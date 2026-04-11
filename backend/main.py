@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.request_context import reset_request_id, set_request_id
 from app.ml.pipeline_loader import is_pipeline_loaded, load_pipeline
-from app.services.cache_service import get_redis, redis_connected
+from app.services.cache_service import redis_connected
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -28,11 +28,7 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(load_pipeline)
     logger.info("Pipeline ready.")
     yield
-    try:
-        redis = get_redis()
-        await redis.aclose()
-    except Exception:
-        pass
+    # Upstash uses stateless HTTP — no connection to close
 
 
 app = FastAPI(
