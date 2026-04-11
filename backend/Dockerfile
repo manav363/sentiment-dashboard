@@ -7,6 +7,10 @@ FROM python:3.11-slim
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY . .
+
+ENV TRANSFORMERS_CACHE=/tmp/huggingface
+ENV HF_HOME=/tmp/huggingface
+
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser
 EXPOSE 8000
