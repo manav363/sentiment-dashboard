@@ -397,7 +397,6 @@ All variables go in `backend/.env`. Copy from `.env.example` to get started.
 
 ## Roadmap
 
-- [ ] Twitter/X handle analysis (per-tweet sentiment + aggregate distribution)
 - [ ] Batch file upload (CSV of texts → bulk classification)
 - [ ] Confidence threshold alerts ("flag anything below 70% confidence")
 - [ ] Export results as PDF report
