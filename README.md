@@ -11,14 +11,16 @@
 
 **Full-stack NLP sentiment dashboard — paste text or drop a URL, get instant AI-powered sentiment analysis.**
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Visit%20App-00D4AA?style=flat-square&logo=vercel&logoColor=white)](https://sentiment-dashboard-lac.vercel.app)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?style=flat-square&logo=huggingface&logoColor=black)](https://huggingface.co)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
+[![Redis](https://img.shields.io/badge/Redis-Upstash-DC382D?style=flat-square&logo=redis&logoColor=white)](https://upstash.com)
 [![License](https://img.shields.io/badge/License-MIT-00D4AA?style=flat-square)](LICENSE)
+
+**[sentiment-dashboard-lac.vercel.app](https://sentiment-dashboard-lac.vercel.app)** · **[API Health](https://manavg1234567-sentiscope-api.hf.space/health)** · **[GitHub](https://github.com/manav363/sentiment-dashboard)**
 
 </div>
 
@@ -38,8 +40,20 @@ Output:
 ```
 
 **Two input modes:**
-- **Text** — paste any text up to 5,000 characters
+- **Text** — paste any content up to 5,000 characters
 - **URL** — paste a news article link; the backend scrapes, cleans, and chunks the body text automatically
+
+---
+
+## Deployment
+
+| Service | Platform | URL |
+|---|---|---|
+| Frontend | Vercel | https://sentiment-dashboard-lac.vercel.app |
+| Backend API | HuggingFace Spaces (Docker) | https://manavg1234567-sentiscope-api.hf.space |
+| Redis Cache | Upstash (REST API) | managed |
+
+Zero cost. No credit card required.
 
 ---
 
@@ -49,13 +63,13 @@ Output:
 |---|---|
 | ML Model | `cardiffnlp/twitter-roberta-base-sentiment-latest` (HuggingFace Transformers) |
 | Backend | FastAPI 0.111 · Uvicorn · PyTorch (CPU) · Pydantic v2 |
-| Caching | Redis 7 (async, graceful degradation if unavailable) |
+| Caching | Upstash Redis REST API (async, graceful degradation) |
 | Scraping | Trafilatura (primary) → httpx + BeautifulSoup4 (fallback) |
 | Rate Limiting | SlowAPI — 30 req/min text · 10 req/min URL |
 | Frontend | React 19 · TypeScript 5.4 · Vite 5 · Tailwind CSS 4 |
 | State | TanStack React Query v5 · Axios · React Router v6 |
 | Testing | pytest + pytest-asyncio (backend) · Vitest + Testing Library (frontend) |
-| Infra | Docker Compose · nginx reverse proxy · multi-stage builds |
+| Infra | Docker · nginx reverse proxy · multi-stage builds · HuggingFace Spaces |
 
 ---
 
@@ -63,33 +77,30 @@ Output:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Browser                                                        │
+│  Browser (Vercel)                                               │
 │                                                                 │
 │   Home (Text / URL tabs)                                        │
 │       │  useMutation (React Query)                              │
 │       ▼                                                         │
-│   Axios client (/api proxy)                                     │
+│   Axios client → VITE_API_BASE_URL                              │
 └───────────────────────┬─────────────────────────────────────────┘
-                        │ HTTP
+                        │ HTTPS
                         ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  nginx (prod) / Vite proxy (dev)                                │
-│                        │                                        │
-│                        ▼                                        │
-│  FastAPI                                                        │
+│  FastAPI (HuggingFace Spaces — Docker)                          │
 │  ├── BodySizeLimitMiddleware (64 KB cap)                        │
 │  ├── CORSMiddleware (env-configured origins)                    │
 │  ├── RequestIDMiddleware (X-Request-ID tracing)                 │
 │  ├── SlowAPI rate limiter                                       │
 │  │                                                              │
 │  ├── POST /api/sentiment/analyze                                │
-│  │     └── cache_service (Redis SHA-256 key)                   │
+│  │     └── cache_service → Upstash Redis (SHA-256 key)         │
 │  │           └── sentiment_engine                              │
 │  │                 ├── text_preprocessor (clean + chunk)       │
 │  │                 └── pipeline_loader (RoBERTa singleton)     │
 │  │                                                              │
 │  ├── POST /api/url/analyze                                      │
-│  │     └── cache_service                                        │
+│  │     └── cache_service → Upstash Redis                       │
 │  │           ├── scraper_service                               │
 │  │           │     ├── SSRF validation (hostname + DNS check)  │
 │  │           │     ├── trafilatura (primary)                   │
@@ -97,10 +108,6 @@ Output:
 │  │           └── sentiment_engine                              │
 │  │                                                              │
 │  └── GET /health (model + Redis status)                        │
-│                                                                 │
-│  Infrastructure                                                 │
-│  ├── Redis 7 Alpine (response cache, TTL 3600s)                │
-│  └── HuggingFace Model Hub (downloaded once, volume-cached)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -145,12 +152,11 @@ The 500MB RoBERTa model loads once on startup in a background thread — not on 
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(load_pipeline)   # warm up before accepting traffic
     yield
-    redis = await get_redis()
-    await redis.aclose()                     # clean shutdown
+    # Upstash uses stateless HTTP — no connection teardown needed
 ```
 
 ### Graceful Redis degradation
-All cache operations are wrapped in try/except. If Redis is unavailable, the app continues without caching — no `500` errors, no user-facing impact.
+All cache operations are wrapped in try/except. If Upstash is unavailable, the app continues without caching — no `500` errors, no user-facing impact.
 
 ### Request correlation
 Every request carries an `X-Request-ID` — either echoed from the client header or auto-generated as a UUID — propagated through a `ContextVar` for structured log correlation.
@@ -181,7 +187,7 @@ sentiment-dashboard/
 │       │   ├── request.py               # Pydantic request schemas
 │       │   └── response.py             # Pydantic response schemas
 │       └── services/
-│           ├── cache_service.py         # Redis get/set with fallback
+│           ├── cache_service.py         # Upstash Redis get/set with fallback
 │           ├── scraper_service.py       # SSRF-safe scraper (trafilatura + httpx)
 │           └── sentiment_engine.py      # Chunked concurrent inference
 │
@@ -198,7 +204,7 @@ sentiment-dashboard/
 │       ├── pages/                       # Home, Results, History, NotFound
 │       └── types/                       # TypeScript interfaces
 │
-├── docker-compose.yml                   # Redis + backend + frontend, healthchecks
+├── docker-compose.yml                   # Local dev: Redis + backend + frontend
 └── .env.example
 ```
 
@@ -207,7 +213,7 @@ sentiment-dashboard/
 ## API reference
 
 ### `GET /health`
-Returns backend readiness. Polled by the frontend before enabling form submission.
+Returns backend readiness. Polled by the frontend on load before enabling submissions.
 
 ```json
 {
@@ -253,7 +259,7 @@ Scrapes an article URL, extracts body text, and classifies it. Rate limited to 1
   "url": "https://example.com/article",
   "title": "Article Title",
   "chunk_count": 3,
-  "result": { ...same shape as sentiment response... }
+  "result": { "label": "positive", "score": 0.874, "breakdown": [...] }
 }
 ```
 
@@ -273,7 +279,7 @@ Scrapes an article URL, extracts body text, and classifies it. Rate limited to 1
 ### Prerequisites
 - Python 3.11+
 - Node.js 20+
-- Docker (for Redis) or a local Redis instance
+- Docker (for Redis)
 
 ### 1. Clone and configure
 
@@ -282,8 +288,6 @@ git clone https://github.com/manav363/sentiment-dashboard.git
 cd sentiment-dashboard
 cp .env.example backend/.env
 ```
-
-Edit `backend/.env` — the defaults work for local dev with no API keys required.
 
 ### 2. Start Redis
 
@@ -300,9 +304,8 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-> The first startup downloads the RoBERTa model (~500 MB). Subsequent starts use the cached model.
+> First startup downloads the RoBERTa model (~500 MB). Subsequent starts use the local cache.
 
-Verify readiness:
 ```bash
 curl http://localhost:8000/health
 # {"status":"ok","model_loaded":true,"redis_connected":true}
@@ -321,8 +324,6 @@ npm run dev
 
 ## Running with Docker Compose
 
-Single command — spins up Redis, backend (with model warm-up health check), and nginx-fronted frontend:
-
 ```bash
 docker-compose up --build
 ```
@@ -333,8 +334,6 @@ docker-compose up --build
 | Backend API | http://localhost:8000 |
 | Health check | http://localhost:8000/health |
 
-The frontend container waits for the backend `service_healthy` condition before starting, so the UI is never served before the model is ready.
-
 ---
 
 ## Tests
@@ -342,14 +341,13 @@ The frontend container waits for the backend `service_healthy` condition before 
 ### Backend
 
 ```bash
-cd backend
-source .venv/bin/activate
+cd backend && source .venv/bin/activate
 pytest -v
 ```
 
 | Test file | What it covers |
 |---|---|
-| `test_main.py` | Health endpoint, `X-Request-ID` header presence and passthrough |
+| `test_main.py` | Health endpoint, `X-Request-ID` presence and passthrough |
 | `test_sentiment_engine.py` | Parallel chunk inference, semaphore concurrency, label ordering |
 | `test_scraper_service.py` | SSRF blocking (localhost, private IPs, DNS-resolved privates), trafilatura → httpx fallback |
 | `test_cache_service.py` | Redis failure resilience — no exception raised on connection error |
@@ -361,7 +359,7 @@ pytest -v
 ```bash
 cd frontend
 npm run test
-npm run build   # type-check + bundle
+npm run build
 npm run lint
 ```
 
@@ -371,12 +369,12 @@ npm run lint
 
 | Area | Implementation |
 |---|---|
-| SSRF | Hostname blocklist + resolved IP validation (private, loopback, link-local, multicast, reserved ranges) |
+| SSRF | Hostname blocklist + resolved IP validation (private, loopback, link-local, multicast, reserved) |
 | CORS | Configurable via `ALLOWED_ORIGINS` env var — no wildcard `*` |
 | Rate limiting | SlowAPI — 30/min text · 10/min URL |
 | Body size | `BodySizeLimitMiddleware` — 64 KB hard cap, returns `413` |
 | Input validation | Pydantic `min_length`, `max_length`, `HttpUrl` type enforcement |
-| Container | Non-root user (`appuser`) in backend container, multi-stage builds |
+| Container | Non-root user (`appuser`), multi-stage Docker builds |
 | CSP | `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` via nginx |
 | Secrets | `.env` gitignored, `.env.example` provided for all variables |
 
@@ -384,23 +382,30 @@ npm run lint
 
 ## Environment variables
 
-All variables go in `backend/.env`. Copy from `.env.example` to get started.
+### Backend (`backend/.env`)
 
 | Variable | Default | Description |
 |---|---|---|
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `UPSTASH_REDIS_REST_URL` | — | Upstash Redis REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | — | Upstash Redis REST token |
 | `BACKEND_PORT` | `8000` | Uvicorn port |
 | `ALLOWED_ORIGINS` | `["http://localhost:5173"]` | CORS allowed origins (JSON array) |
 | `HF_TOKEN` | *(empty)* | HuggingFace token — only needed for gated models |
+
+### Frontend
+
+| Variable | Description |
+|---|---|
+| `VITE_API_BASE_URL` | Backend base URL (e.g. `https://your-space.hf.space`) — omit for local dev |
 
 ---
 
 ## Roadmap
 
+- [ ] Twitter/X handle analysis (per-tweet sentiment + aggregate distribution)
 - [ ] Batch file upload (CSV of texts → bulk classification)
-- [ ] Confidence threshold alerts ("flag anything below 70% confidence")
+- [ ] Confidence threshold alerts
 - [ ] Export results as PDF report
-- [ ] Deploy to Railway / Render with persistent model volume
 
 ---
 
