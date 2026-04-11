@@ -1,7 +1,9 @@
 import axios from "axios";
 
+const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 const client = axios.create({
-  baseURL: "/api",
+  baseURL: BASE ? `${BASE}/api` : "/api",
   timeout: 180_000,
   headers: { "Content-Type": "application/json" },
 });
@@ -11,7 +13,7 @@ let modelReady = false;
 async function waitForModel(retries = 30, intervalMs = 2000): Promise<void> {
   for (let i = 0; i < retries; i++) {
     try {
-      const { data } = await axios.get("/health", { timeout: 5000 });
+      const { data } = await axios.get(`${BASE}/health`, { timeout: 5000 });
       if (data?.model_loaded) {
         modelReady = true;
         return;
