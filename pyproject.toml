@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["backend/.venv", "backend/__pycache__", "frontend/node_modules", "frontend/dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

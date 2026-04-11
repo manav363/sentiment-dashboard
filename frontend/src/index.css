@@ -1,0 +1,67 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500&display=swap");
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0a0f1e;
+  --bg-surface: #111827;
+  --bg-elevated: #1f2937;
+  --border: #2d3748;
+  --accent: #00d4aa;
+  --accent-dim: #00d4aa33;
+  --positive: #22c55e;
+  --negative: #ef4444;
+  --neutral: #f59e0b;
+  --text-primary: #f1f5f9;
+  --text-muted: #94a3b8;
+  --font-heading: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+}
+
+body {
+  background:
+    radial-gradient(circle at top, rgba(0, 212, 170, 0.1), transparent 30%),
+    var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+}
+
+.fade-in {
+  animation: fade-in 0.45s ease-out;
+}
+
+.surface-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.2);
+}
+
+.tweet-text-collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
