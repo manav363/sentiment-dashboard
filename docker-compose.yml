@@ -1,19 +1,17 @@
 services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-
   backend:
     build: ./backend
     ports: ["8000:8000"]
     env_file: ./backend/.env
-    environment:
-      - REDIS_URL=redis://redis:6379
-    depends_on: [redis]
     volumes:
       - hf_cache:/root/.cache/huggingface
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # python:3.11-slim ships without curl, so probe with the interpreter itself
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
       interval: 10s
       timeout: 5s
       retries: 10
@@ -26,7 +24,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-
 
 volumes:
   hf_cache:

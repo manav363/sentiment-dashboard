@@ -4,7 +4,13 @@ import asyncio
 import logging
 
 from app.core.request_context import get_request_id
-from app.ml.model_config import CHUNK_OVERLAP, CHUNK_SIZE, INFERENCE_CONCURRENCY, LABELS
+from app.ml.model_config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    INFERENCE_CONCURRENCY,
+    LABELS,
+    MAX_TOKENS,
+)
 from app.ml.pipeline_loader import get_pipeline
 from app.ml.text_preprocessor import chunk_text, clean_text
 from app.models.response import ScoreBreakdown, SentimentResult
@@ -33,7 +39,9 @@ def _normalize_scores(
 async def _run_inference(text: str) -> dict[str, float]:
     try:
         pipeline = get_pipeline()
-        output = await asyncio.to_thread(pipeline, text)
+        # Chunks are sized in words, and a 400-word chunk can exceed the model's 512-token
+        # window; without truncation the tokenizer output would be too long for the model.
+        output = await asyncio.to_thread(pipeline, text, truncation=True, max_length=MAX_TOKENS)
     except Exception:
         logger.exception(
             "Sentiment inference failed request_id=%s text_length=%s",
