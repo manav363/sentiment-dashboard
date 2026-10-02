@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 from app.models.response import ScoreBreakdown, SentimentResult
 
-
 MOCK_SENTIMENT_RESULT = SentimentResult(
     label="positive",
     score=0.92,

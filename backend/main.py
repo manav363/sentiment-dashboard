@@ -4,16 +4,17 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import uvicorn
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.api import sentiment, url_scraper
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.request_context import reset_request_id, set_request_id
 from app.ml.pipeline_loader import is_pipeline_loaded, load_pipeline
 from app.services.cache_service import redis_connected
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 
 logging.basicConfig(
     level=logging.INFO,

@@ -6,6 +6,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
+src = ["backend"]
 target-version = "py311"
 exclude = ["backend/.venv", "backend/__pycache__", "frontend/node_modules", "frontend/dist"]
 
