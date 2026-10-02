@@ -1,0 +1,5 @@
+# Test and lint tooling. Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.11.8
