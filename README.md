@@ -11,6 +11,7 @@
 
 **Full-stack NLP sentiment dashboard — paste text or drop a URL, get instant AI-powered sentiment analysis.**
 
+[![CI](https://img.shields.io/github/actions/workflow/status/manav363/sentiment-dashboard/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/manav363/sentiment-dashboard/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Visit%20App-00D4AA?style=flat-square&logo=vercel&logoColor=white)](https://sentiment-dashboard-lac.vercel.app)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -28,7 +29,7 @@
 
 ## What it does
 
-SentiScope runs your text or any article URL through a fine-tuned RoBERTa transformer and returns a **positive / neutral / negative** classification with per-class confidence scores — visualised in a real-time gauge and animated confidence bars. Results are cached server-side in Redis and persisted locally in browser history.
+SentiScope runs your text or any article URL through a pretrained RoBERTa sentiment model ([`cardiffnlp/twitter-roberta-base-sentiment-latest`](https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment-latest), used as published, not trained here) and returns a **positive / neutral / negative** classification with per-class confidence scores, shown in a gauge and confidence bars. Results can be cached server-side in Upstash Redis (optional) and are kept in the browser's local history.
 
 ```
 Input: "The product launch exceeded all expectations and customers are thrilled."
@@ -64,11 +65,11 @@ Zero cost. No credit card required.
 | ML Model | `cardiffnlp/twitter-roberta-base-sentiment-latest` (HuggingFace Transformers) |
 | Backend | FastAPI 0.111 · Uvicorn · PyTorch (CPU) · Pydantic v2 |
 | Caching | Upstash Redis REST API (async, graceful degradation) |
-| Scraping | Trafilatura (primary) → httpx + BeautifulSoup4 (fallback) |
+| Scraping | httpx (redirect-validated fetch) → Trafilatura (primary) / BeautifulSoup4 (fallback) extraction |
 | Rate Limiting | SlowAPI — 30 req/min text · 10 req/min URL |
 | Frontend | React 19 · TypeScript 5.4 · Vite 5 · Tailwind CSS 4 |
 | State | TanStack React Query v5 · Axios · React Router v6 |
-| Testing | pytest + pytest-asyncio (backend) · Vitest + Testing Library (frontend) |
+| Testing / CI | pytest + pytest-asyncio (backend) · Vitest + Testing Library (frontend) · GitHub Actions (lint, tests, build, dependency audit) |
 | Infra | Docker · nginx reverse proxy · multi-stage builds · HuggingFace Spaces |
 
 ---
@@ -102,9 +103,9 @@ Zero cost. No credit card required.
 │  ├── POST /api/url/analyze                                      │
 │  │     └── cache_service → Upstash Redis                       │
 │  │           ├── scraper_service                               │
-│  │           │     ├── SSRF validation (hostname + DNS check)  │
-│  │           │     ├── trafilatura (primary)                   │
-│  │           │     └── httpx + BS4 (fallback)                  │
+│  │           │     ├── fetch (SSRF check on every redirect hop)│
+│  │           │     ├── trafilatura extract (primary)           │
+│  │           │     └── BeautifulSoup4 (fallback)               │
 │  │           └── sentiment_engine                              │
 │  │                                                              │
 │  └── GET /health (model + Redis status)                        │
@@ -116,47 +117,50 @@ Zero cost. No credit card required.
 ## Engineering highlights
 
 ### Chunked inference with bounded concurrency
-Long texts are split into 400-word overlapping chunks (50-word overlap) so each fits within the model's 512-token window. Chunks are processed concurrently with `asyncio.Semaphore(4)` to cap parallel threads, then scores are averaged across chunks.
+Long texts are split into 400-word overlapping chunks (50-word overlap), which keeps each chunk near the model's 512-token window; the pipeline is called with `truncation=True` so a chunk that tokenizes slightly longer is cut rather than rejected. Chunks are processed concurrently with `asyncio.Semaphore(4)` to cap parallel threads, then scores are averaged across chunks.
 
 ```python
 # sentiment_engine.py
 async def _run_chunk(chunk: str, semaphore: asyncio.Semaphore) -> list[dict]:
     async with semaphore:
-        return await asyncio.to_thread(get_pipeline(), chunk)
+        return await asyncio.to_thread(get_pipeline(), chunk, truncation=True, max_length=512)
 
 semaphore = asyncio.Semaphore(4)
 results = await asyncio.gather(*[_run_chunk(c, semaphore) for c in chunks])
 ```
 
 ### SSRF protection on the URL scraper
-URL submissions are validated against private/loopback/link-local IP ranges before any HTTP request is made — including DNS resolution to catch rebinding attempts.
+A URL-fetching endpoint can be turned into a way to reach internal services, so every URL is checked before it is fetched: scheme must be http(s), `localhost` names are refused, and the hostname is resolved and rejected if any address is private, loopback, link-local, multicast, reserved or unspecified.
+
+Checking only the URL the user typed is not enough, because a public page can answer `302 Location: http://169.254.169.254/...`. Redirects are therefore followed by hand and **each hop is validated again** (capped at 5):
 
 ```python
 # scraper_service.py
-async def _validate_url(url: str) -> None:
-    hostname = urlparse(url).hostname
-    if hostname in BLOCKED_HOSTNAMES:
-        raise HTTPException(422, "URL target is not allowed")
-    for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
-        ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            raise HTTPException(422, "URL resolves to a private address")
+for _ in range(MAX_REDIRECTS + 1):
+    await validate_public_url(current)
+    response = await client.get(current, headers={"User-Agent": USER_AGENT})
+    if not response.is_redirect:
+        response.raise_for_status()
+        return response.text
+    current = str(response.url.join(response.headers["location"]))
 ```
 
+This was a real bug that the project originally had (the client followed redirects automatically). It is now covered by tests that serve a redirect to the cloud-metadata address and to `localhost` and assert the internal URL is never requested. One gap remains and is listed under [Known limitations](#known-limitations).
+
 ### Singleton model loading with lifespan warm-up
-The 500MB RoBERTa model loads once on startup in a background thread — not on the first request. This avoids a 10-second cold hit on the first user interaction.
+The ~500 MB RoBERTa model is loaded once at startup, in a worker thread so the event loop is not blocked, and the server only starts accepting traffic after it is ready. The first user request therefore never pays the model-load cost.
 
 ```python
 # main.py
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await asyncio.to_thread(load_pipeline)   # warm up before accepting traffic
+    await asyncio.to_thread(load_pipeline)   # finish loading before accepting traffic
     yield
     # Upstash uses stateless HTTP — no connection teardown needed
 ```
 
 ### Graceful Redis degradation
-All cache operations are wrapped in try/except. If Upstash is unavailable, the app continues without caching — no `500` errors, no user-facing impact.
+The cache is optional by design. With no Upstash credentials, or if Upstash is unreachable, cache reads and writes quietly become no-ops and `/health` reports `redis_connected: false`; requests are still served, just uncached. `tests/test_cache_service.py` covers both the failing-backend and the no-credentials cases.
 
 ### Request correlation
 Every request carries an `X-Request-ID` — either echoed from the client header or auto-generated as a UUID — propagated through a `ContextVar` for structured log correlation.
@@ -169,7 +173,8 @@ Every request carries an `X-Request-ID` — either echoed from the client header
 sentiment-dashboard/
 ├── backend/
 │   ├── main.py                          # App factory, lifespan, all middleware
-│   ├── requirements.txt
+│   ├── requirements.txt                 # Runtime dependencies (pinned)
+│   ├── requirements-dev.txt             # pytest, ruff
 │   ├── Dockerfile                       # Multi-stage build, non-root user
 │   └── app/
 │       ├── api/
@@ -204,7 +209,9 @@ sentiment-dashboard/
 │       ├── pages/                       # Home, Results, History, NotFound
 │       └── types/                       # TypeScript interfaces
 │
-├── docker-compose.yml                   # Local dev: Redis + backend + frontend
+├── .github/workflows/ci.yml             # Lint, tests, build, dependency audit
+├── docker-compose.yml                   # Local dev: backend + frontend
+├── LICENSE
 └── .env.example
 ```
 
@@ -279,7 +286,7 @@ Scrapes an article URL, extracts body text, and classifies it. Rate limited to 1
 ### Prerequisites
 - Python 3.11+
 - Node.js 20+
-- Docker (for Redis)
+- *(Optional)* a free [Upstash](https://upstash.com) Redis database, for response caching
 
 ### 1. Clone and configure
 
@@ -289,18 +296,16 @@ cd sentiment-dashboard
 cp .env.example backend/.env
 ```
 
-### 2. Start Redis
+### 2. (Optional) Enable caching
 
-```bash
-docker run -d --name sentiment-redis -p 6379:6379 redis:7-alpine
-```
+Put your Upstash REST URL and token in `backend/.env` (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`). Skip this step and the app runs without a cache.
 
 ### 3. Start the backend
 
 ```bash
 cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -308,7 +313,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok","model_loaded":true,"redis_connected":true}
+# {"status":"ok","model_loaded":true,"redis_connected":false}   # true once Upstash is configured
 ```
 
 ### 4. Start the frontend
@@ -325,7 +330,8 @@ npm run dev
 ## Running with Docker Compose
 
 ```bash
-docker-compose up --build
+cp .env.example backend/.env
+docker compose up --build
 ```
 
 | Service | URL |
@@ -342,15 +348,15 @@ docker-compose up --build
 
 ```bash
 cd backend && source .venv/bin/activate
-pytest -v
+pytest -v        # or `python -m pytest` from the repo root
 ```
 
 | Test file | What it covers |
 |---|---|
 | `test_main.py` | Health endpoint, `X-Request-ID` presence and passthrough |
 | `test_sentiment_engine.py` | Parallel chunk inference, semaphore concurrency, label ordering |
-| `test_scraper_service.py` | SSRF blocking (localhost, private IPs, DNS-resolved privates), trafilatura → httpx fallback |
-| `test_cache_service.py` | Redis failure resilience — no exception raised on connection error |
+| `test_scraper_service.py` | SSRF blocking (localhost, private IPs, DNS-resolved privates), redirects into internal addresses refused, redirect loops cut off, trafilatura → BeautifulSoup fallback |
+| `test_cache_service.py` | Cache is optional: failing backend and missing credentials both degrade to "no cache"; normal set/get round trip |
 | `test_text_preprocessor.py` | `clean_text` HTML stripping, whitespace normalisation, truncation; `chunk_text` overlap and size bounds |
 | `test_api_routes.py` | Full round-trip integration tests for both endpoints, 413 body limit, request ID echo |
 
@@ -363,13 +369,15 @@ npm run build
 npm run lint
 ```
 
+GitHub Actions runs backend lint and tests, frontend lint, tests and build, and a dependency audit on every push and pull request.
+
 ---
 
 ## Security
 
 | Area | Implementation |
 |---|---|
-| SSRF | Hostname blocklist + resolved IP validation (private, loopback, link-local, multicast, reserved) |
+| SSRF | Hostname blocklist + resolved-IP validation (private, loopback, link-local, multicast, reserved), re-applied to every redirect hop |
 | CORS | Configurable via `ALLOWED_ORIGINS` env var — no wildcard `*` |
 | Rate limiting | SlowAPI — 30/min text · 10/min URL |
 | Body size | `BodySizeLimitMiddleware` — 64 KB hard cap, returns `413` |
@@ -386,10 +394,10 @@ npm run lint
 
 | Variable | Default | Description |
 |---|---|---|
-| `UPSTASH_REDIS_REST_URL` | — | Upstash Redis REST endpoint |
-| `UPSTASH_REDIS_REST_TOKEN` | — | Upstash Redis REST token |
+| `UPSTASH_REDIS_REST_URL` | *(empty)* | Upstash Redis REST endpoint — leave empty to disable caching |
+| `UPSTASH_REDIS_REST_TOKEN` | *(empty)* | Upstash Redis REST token |
 | `BACKEND_PORT` | `8000` | Uvicorn port |
-| `ALLOWED_ORIGINS` | `["http://localhost:5173"]` | CORS allowed origins (JSON array) |
+| `ALLOWED_ORIGINS` | `["http://localhost:5173", "http://localhost:3000"]` | CORS allowed origins (JSON array) |
 | `HF_TOKEN` | *(empty)* | HuggingFace token — only needed for gated models |
 
 ### Frontend
@@ -409,8 +417,28 @@ npm run lint
 
 ---
 
+## Known limitations
+
+- **The model is not tuned for this use and is not evaluated here.** It is a third-party model trained on tweets, and this repository contains no accuracy benchmark. News articles are a different kind of text, so treat results as indicative rather than measured.
+- **One label per article.** URL mode splits the text into chunks and averages their scores, which hides mixed sentiment inside a single article.
+- **DNS rebinding is not fully closed.** The scraper validates the resolved addresses, but the HTTP client resolves the name again when it connects. Closing that race means pinning the validated IP for the connection, or filtering egress at the network level.
+- **Rate limiting is per process and per client address.** SlowAPI keeps counters in memory and keys on the address the app sees, so it does not coordinate across several instances, and behind a reverse proxy it needs forwarded-header handling to tell clients apart.
+- **Known dependency advisories in the ML stack.** As of October 2026, `pip-audit` reports 20 advisories against the pinned `torch==2.3.0` and 26 against `transformers==4.40.0`. They were not upgraded because the fixes land in much newer releases and the model's behaviour would need to be re-checked against them (download access to the model was not available while preparing this change). CI audits every other dependency and fails on findings, but excludes these two. On the frontend, `react-router` 6.x has moderate advisories whose fix is the v7 major upgrade.
+
+---
+
+## How this was built
+
+SentiScope was built with AI coding assistance (Claude). The behaviour described above is covered by the backend and frontend test suites, which CI runs on every push, and the limitations listed here are the ones found while auditing the code before publishing this version.
+
+## License
+
+[MIT](LICENSE)
+
+---
+
 <div align="center">
 
-Built by [Manavgarg](https://github.com/manav363)
+Built by [Manav Garg](https://github.com/manav363)
 
 </div>
